@@ -50,3 +50,30 @@ CAREUNIT_GROUPS = {
     "Neurology":                                          "cardiac_neuro",
     "Medicine/Cardiology Intermediate":                   "cardiac_neuro",
 }
+
+# --- chartevents feature concepts ------------------------------------------
+# Verified against d_items by s2a_itemids (manifest s2a_itemids-20260802T094010).
+# Multiple recording routes per concept are POOLED, not treated as separate
+# features: no patient carries all routes, so separate columns would be mostly
+# null. Invasive and cuff pressures differ systematically -- noted as a
+# limitation; per-route counts can be profiled separately if needed.
+CHART_CONCEPTS = {
+    "hr":   [220045],
+    "sbp":  [220050, 225309, 220179, 224167, 227243],   # arterial, ART line, NIBP, manual L/R
+    "dbp":  [220051, 225310, 220180, 224643, 227242],
+    "map":  [220052, 225312, 220181],
+    "rr":   [220210],                                    # excludes ventilator Set/spont/Total
+    "spo2": [220277],                                    # excludes 220227 SaO2 (blood gas)
+    "temp": [223762, 223761],                            # C native; F converted in S2
+}
+TEMP_F_ITEMID = 223761
+
+# Physiologically implausible values are artifacts (transducer flush, cuff
+# error). Dropped before aggregation, since min/max are the aggregates most
+# sensitive to a single bad reading.
+CHART_RANGES = {
+    "hr": (20.0, 300.0), "sbp": (30.0, 300.0), "dbp": (10.0, 200.0),
+    "map": (20.0, 250.0), "rr": (0.0, 80.0), "spo2": (50.0, 100.0),
+    "temp": (25.0, 45.0),
+}
+CHART_AGGS = ["min", "max", "mean", "std", "first", "last", "count"]
