@@ -61,6 +61,7 @@ class Run:
         self.rec["cluster"]["executors_expected"] = expected
         self.rec["cluster"]["executor_wait_s"] = round(time.time() - start, 1)
         self.t0 = time.time()
+        self.rec["cluster"]["default_parallelism"] = sc.defaultParallelism
         print(f"[executors] {n}/{expected} registered "
               f"in {self.rec['cluster']['executor_wait_s']}s")
         return n
