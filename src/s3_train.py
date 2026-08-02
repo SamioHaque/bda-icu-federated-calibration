@@ -131,6 +131,8 @@ def main(args):
 
     fit_times = []
     frames = []
+    out = C.PATH_MODELS + "/predictions"
+    first_write = True
 
     try:
         for seed in seeds:
@@ -139,7 +141,7 @@ def main(args):
 
             train_all = df.filter(F.col("split") == "train").cache()
             holdout = df.filter(F.col("split").isin("val", "test")).cache()
-            run.count("train_seed%d" % seed, train_all.count())
+            n_train = run.count("train_seed%d" % seed, train_all.count())
             run.count("holdout_seed%d" % seed, holdout.count())
 
             for model_name in models:
@@ -149,7 +151,7 @@ def main(args):
                 dt = round(time.time() - t0, 2)
                 fit_times.append({"seed": seed, "model": model_name,
                                   "regime": "R1_pooled", "client": "pooled",
-                                  "n_train": n_all, "fit_s": dt})
+                                  "n_train": n_train, "fit_s": dt})
                 print("[fit] seed=%d %s R1_pooled  %.2fs" % (seed, model_name, dt))
 
                 for cond in conditions:
@@ -197,23 +199,29 @@ def main(args):
                               .select(*PRED_COLS))
                     frames.append(ens)
 
+                # Flush this (seed, model) chunk. Accumulating every frame and
+                # unioning once at the end inflates the driver-side query plan;
+                # at 3 seeds x 2 models the serialized task binary grows large
+                # enough to destabilise the final write.
+                chunk = frames[0].select(*PRED_COLS)
+                for extra in frames[1:]:
+                    chunk = chunk.unionByName(extra.select(*PRED_COLS))
+                (chunk.write
+                      .mode("overwrite" if first_write else "append")
+                      .partitionBy("seed", "condition")
+                      .parquet(out))
+                print("[write] flushed seed=%d model=%s (%d frames)"
+                      % (seed, model_name, len(frames)))
+                first_write = False
+                frames = []
+
             df.unpersist()
             train_all.unpersist()
             holdout.unpersist()
 
-        preds = frames[0].select(*PRED_COLS)
-        for extra in frames[1:]:
-            preds = preds.unionByName(extra.select(*PRED_COLS))
-
         run.param("fit_times", fit_times)  # DRIVER-SIDE ONLY -- small table
         run.param("total_fit_s", round(sum(f["fit_s"] for f in fit_times), 2))
         run.param("n_fits", len(fit_times))
-
-        out = C.PATH_MODELS + "/predictions"
-        (preds.repartition("seed", "condition")
-              .write.mode("overwrite")
-              .partitionBy("seed", "condition")
-              .parquet(out))
         run.output(out)
 
         written = spark.read.parquet(out)
