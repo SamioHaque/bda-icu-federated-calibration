@@ -16,7 +16,6 @@ $gcloudArgs = @(
   "--cluster=$Cluster",
   "--region=us-east1",
   "--py-files=config.py,src/manifest.py",
-  "--jars=gs://spark-lib/bigquery/spark-3.5-bigquery-0.44.2.jar",
   "--",
   "--git-sha=$sha"
 ) + $JobArgs
