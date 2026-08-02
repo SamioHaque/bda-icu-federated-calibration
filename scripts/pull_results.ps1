@@ -5,9 +5,15 @@ param([string]$Bucket = "innate-portal-501710-n1-spark")
 $root = Split-Path -Parent $PSScriptRoot
 $dest = Join-Path $root "results"
 
-gcloud storage rsync -r "gs://$Bucket/manifests" "$dest\manifests"
-gcloud storage rsync -r "gs://$Bucket/metrics"   "$dest\metrics"
+foreach ($prefix in @("manifests", "metrics")) {
+    $exists = gcloud storage ls "gs://$Bucket/$prefix/" 2>$null
+    if ($exists) {
+        gcloud storage rsync -r "gs://$Bucket/$prefix" (Join-Path $dest $prefix)
+    } else {
+        Write-Host "skip: gs://$Bucket/$prefix (not created yet)" -ForegroundColor DarkGray
+    }
+}
 
 Write-Host "`nManifests:" -ForegroundColor Cyan
-Get-ChildItem "$dest\manifests\*.json" | Sort-Object Name |
+Get-ChildItem (Join-Path $dest "manifests\*.json") | Sort-Object Name |
     Select-Object Name, Length | Format-Table -AutoSize
