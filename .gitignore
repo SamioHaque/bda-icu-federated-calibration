@@ -1,3 +1,32 @@
+# Data - MIMIC-IV is credentialed under a PhysioNet DUA. Never commit.
+*.csv
+*.csv.gz
+*.parquet
+*.avro
+data/
+raw/
+refs/
+
+# Results are a mirror of gs://.../manifests and gs://.../metrics.
+# GCS is the durable store; keep one source of truth.
+results/*
+!results/.gitkeep
+
+# Credentials
+service-account*.json
+*.key
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
 
 # Editor
 .vscode/
+
+# OS
+Thumbs.db
+.DS_Store
