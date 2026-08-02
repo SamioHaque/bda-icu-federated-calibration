@@ -31,14 +31,10 @@ CANDIDATES = {
 # Independent label search, so we discover ids the candidate list missed
 # (e.g. alternate respiratory-rate or temperature routes).
 SEARCH = {
-    "heart_rate":  r"heart rate",
-    "sbp":         r"blood pressure systolic",
-    "dbp":         r"blood pressure diastolic",
-    "map":         r"pressure mean",
-    "resp_rate":   r"respiratory rate",
-    "spo2":        r"o2 saturation|spo2",
-    "temperature": r"temperature",
-    "gcs":         r"gcs",
+    "bp_abbreviated": r"\bbp\b|\babp\b|\bnbp\b",
+    "temperature":    r"^temperature",
+    "o2_sat":         r"^o2 saturation|^spo2|^arterial o2",
+    "resp":           r"^respiratory rate",
 }
 
 
