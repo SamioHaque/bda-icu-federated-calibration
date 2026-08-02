@@ -1,13 +1,26 @@
 """S4: post-hoc calibration and metric computation.
 
-Phase A -- calibration
-  Isotonic regression fitted on the VALIDATION split of the training client's
-  own data, then applied to that client's validation and test predictions.
-  This mirrors deployment: a site calibrates on data it holds. Fitting on test
-  would leak the evaluation set into the calibrator.
+Phase A -- calibration, at two distinct SCOPES
 
-  Emits both `raw` and `isotonic` rows so every metric can be reported before
-  and after calibration -- the paper's central comparison.
+  Every calibrator is fitted on VALIDATION rows only; fitting on test would
+  leak the evaluation set. The scope is which validation rows are used:
+
+    raw         no calibration.
+    iso_pooled  fitted on the whole pooled validation set for that model.
+                Scenario: a central body receives a donated model and
+                recalibrates it against the population it will serve.
+    iso_target  fitted on the EVALUATION client's own validation rows and
+                applied only to that client. Scenario: the receiving site
+                recalibrates locally on data it already holds.
+
+  The comparison iso_pooled vs iso_target answers the question that motivates
+  the whole calibration analysis: when a model is deployed under prevalence
+  shift, does recalibrating at the destination repair it, and by how much?
+
+  NOTE: S3 scores every client model on the full pooled holdout, so grouping by
+  train_client and filtering to val yields POOLED validation rows -- not the
+  training client's own. Earlier revisions of this file mislabelled iso_pooled
+  as source-client calibration; the scope names above are now literal.
 
 Phase B -- metrics
   All metrics are computed in a small number of distributed passes rather than
@@ -73,48 +86,75 @@ def read_predictions(spark, run):
     return out
 
 
+def _iso():
+    return IsotonicRegression(featuresCol="pv", labelCol="label",
+                              predictionCol="p_iso", isotonic=True)
+
+
+def _shape(df, label):
+    return (df.withColumn("calibration", F.lit(label))
+              .withColumn("p", F.col("p_iso"))
+              .select(*GROUP, "stay_id", "label", "p"))
+
+
 def calibrate(spark, run, args):
-    """Fit isotonic per (seed, condition, model, regime, train_client)."""
+    """Emit raw + iso_pooled (+ iso_target) per model group."""
     preds = read_predictions(spark, run)
     keys = [r.asDict() for r in
             preds.select("seed", "condition", "model", "regime", "train_client")
                  .distinct().orderBy("seed", "condition", "model",
                                      "regime", "train_client").collect()]
-    run.param("n_calibrators", len(keys))
-    print("[cal] %d calibrator groups" % len(keys))
+    print("[cal] %d model groups; target_scope=%s"
+          % (len(keys), not args.no_target_scope))
 
     first = True
     n_fit = 0
-    for k in keys:
+    for gi, k in enumerate(keys, 1):
         cond = ((F.col("seed") == k["seed"]) &
                 (F.col("condition") == k["condition"]) &
                 (F.col("model") == k["model"]) &
                 (F.col("regime") == k["regime"]) &
                 (F.col("train_client") == k["train_client"]))
-        sub = preds.filter(cond)
-        sub = sub.withColumn("pv", array_to_vector(F.array("p")))
+        sub = preds.filter(cond).withColumn("pv", array_to_vector(F.array("p")))
+        sub.cache()
 
-        val = sub.filter(F.col("split") == "val")
-        iso = IsotonicRegression(featuresCol="pv", labelCol="label",
-                                 predictionCol="p_iso", isotonic=True)
-        model = iso.fit(val)
-        out = model.transform(sub)
+        parts = [sub.select(*GROUP, "stay_id", "label", "p")
+                    .withColumn("calibration", F.lit("raw"))
+                    .select(*GROUP, "stay_id", "label", "p")]
 
-        raw = (out.withColumn("calibration", F.lit("raw"))
-                  .select(*GROUP, "stay_id", "label", "p"))
-        cal = (out.withColumn("calibration", F.lit("isotonic"))
-                  .withColumn("p", F.col("p_iso"))
-                  .select(*GROUP, "stay_id", "label", "p"))
-
-        (raw.unionByName(cal).write
-            .mode("overwrite" if first else "append")
-            .partitionBy("seed", "condition")
-            .parquet(PATH_CAL))
-        first = False
+        # --- scope 1: pooled target population
+        m = _iso().fit(sub.filter(F.col("split") == "val"))
         n_fit += 1
-        if n_fit % 10 == 0:
-            print("[cal] fitted %d/%d" % (n_fit, len(keys)))
+        parts.append(_shape(m.transform(sub), "iso_pooled"))
 
+        # --- scope 2: each evaluation client recalibrates on its own data
+        if not args.no_target_scope:
+            evs = sorted([r[0] for r in
+                          sub.select("eval_client").distinct().collect()])
+            for e in evs:
+                se = sub.filter(F.col("eval_client") == e)
+                ve = se.filter(F.col("split") == "val")
+                try:
+                    me = _iso().fit(ve)
+                except Exception as ex:
+                    print("[cal] skip target %s/%s: %s"
+                          % (k["train_client"], e, str(ex)[:80]))
+                    continue
+                n_fit += 1
+                parts.append(_shape(me.transform(se), "iso_target"))
+
+        out = parts[0]
+        for p in parts[1:]:
+            out = out.unionByName(p)
+        (out.write.mode("overwrite" if first else "append")
+            .partitionBy("seed", "condition").parquet(PATH_CAL))
+        first = False
+        sub.unpersist()
+
+        if gi % 10 == 0:
+            print("[cal] group %d/%d, %d calibrators fitted" % (gi, len(keys), n_fit))
+
+    run.param("n_model_groups", len(keys))
     run.count("calibrators_fitted", n_fit)
     return PATH_CAL
 
@@ -219,8 +259,12 @@ def main(args):
     spark.conf.set("spark.sql.shuffle.partitions", str(args.shuffle))
 
     run = Run(spark, "s4_evaluate", args.git_sha,
-              {"n_bins": N_BINS, "calibration": "isotonic",
-               "calibration_fitted_on": "train_client validation split",
+              {"n_bins": N_BINS,
+               "calibration": "isotonic",
+               "calibration_scopes": ["raw", "iso_pooled"] +
+                                     ([] if args.no_target_scope else ["iso_target"]),
+               "iso_pooled_fitted_on": "pooled validation split (all eval clients)",
+               "iso_target_fitted_on": "evaluation client's own validation split",
                "threshold_selected_on": "validation, max F1",
                "shuffle_partitions": args.shuffle,
                "skip_calibration": args.skip_calibration})
@@ -280,4 +324,6 @@ if __name__ == "__main__":
     p.add_argument("--shuffle", type=int, default=64)
     p.add_argument("--skip-calibration", action="store_true",
                    help="reuse an existing predictions_cal; recompute metrics only")
+    p.add_argument("--no-target-scope", action="store_true",
+                   help="skip per-eval-client recalibration (faster, fewer fits)")
     main(p.parse_args())
