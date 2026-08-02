@@ -203,11 +203,18 @@ def auroc(pairs):
 
 # ------------------------------------------------------------------- FL driver
 
-def server_update(strategy, w, delta, st, a):
-    """Server-side aggregation. FedAvg/FedProx take server_lr=1, where the
-    update IS size-weighted averaging. Adaptive optimisers need a much smaller
-    server step: their update magnitude is ~server_lr_adaptive irrespective of
-    the pseudo-gradient scale, so reusing 1.0 would diverge."""
+def server_update(strategy, w, delta, st, a, rnd):
+    """Server-side aggregation.
+
+    FedAvg/FedProx use server_lr=1, where the update IS size-weighted
+    averaging. Adaptive optimisers need a much smaller server step: their
+    update magnitude is ~server_lr_adaptive irrespective of the pseudo-gradient
+    scale, so reusing 1.0 diverges near the optimum.
+
+    Reddi et al. (2021) omit Adam's bias correction, which makes the first
+    rounds crawl because m and v start at zero. We apply it (and say so), so
+    the adaptive arms are not handicapped in early rounds relative to FedAvg.
+    """
     if strategy in ("fedavg", "fedprox", "central"):
         return w + a.server_lr * delta
     slr = a.server_lr_adaptive
@@ -220,13 +227,15 @@ def server_update(strategy, w, delta, st, a):
     else:  # fedyogi
         d2 = delta * delta
         st["v"] = st["v"] - (1.0 - a.beta2) * d2 * np.sign(st["v"] - d2)
-    return w + slr * st["m"] / (np.sqrt(st["v"]) + a.tau)
+    mh = st["m"] / (1.0 - a.beta1 ** rnd)
+    vh = st["v"] / (1.0 - a.beta2 ** rnd)
+    return w + slr * mh / (np.sqrt(np.maximum(vh, 0.0)) + a.tau)
 
 
 def run_strategy(sc, strategy, train_rdd, val_rdd, sizes, K, a, tag):
     """Multi-round federated training. Returns (weights, history)."""
     w = np.zeros(D + 1)
-    st = {"m": np.zeros(D + 1), "v": np.full(D + 1, a.tau ** 2)}
+    st = {"m": np.zeros(D + 1), "v": np.zeros(D + 1)}
     total = float(sum(sizes.values()))
     mu = a.mu if strategy == "fedprox" else 0.0
     hist = []
@@ -254,7 +263,7 @@ def run_strategy(sc, strategy, train_rdd, val_rdd, sizes, K, a, tag):
         delta = np.zeros(D + 1)
         for k in range(K):
             delta += (sizes[k] / total) * (W[k] - w)
-        w = server_update(strategy, w, delta, st, a)
+        w = server_update(strategy, w, delta, st, a, rnd)
 
         rec = {"round": rnd, "train_loss": round(train_loss, 6),
                "delta_norm": round(float(np.linalg.norm(delta)), 6),
@@ -314,7 +323,9 @@ def main(a):
                "n_features": D, "partitions": a.parts,
                "preprocessing": "mean-impute + standardise from federated "
                                 "sufficient statistics (count, sum, sumsq)",
-               "privacy": "none -- no DP, no secure aggregation"})
+               "privacy": "none -- no DP, no secure aggregation",
+               "adam_bias_correction": True,
+               "tag": a.tag})
     run.await_executors(a.expect_executors)
 
     out = C.PATH_MODELS + "/predictions_fl"
@@ -428,4 +439,6 @@ if __name__ == "__main__":
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--shuffle", type=int, default=64)
     p.add_argument("--parts", type=int, default=8)
+    p.add_argument("--tag", default="main",
+                   help="label recorded in the manifest, e.g. a tuning sweep id")
     main(p.parse_args())
