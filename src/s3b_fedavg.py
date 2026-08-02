@@ -204,18 +204,23 @@ def auroc(pairs):
 # ------------------------------------------------------------------- FL driver
 
 def server_update(strategy, w, delta, st, a):
+    """Server-side aggregation. FedAvg/FedProx take server_lr=1, where the
+    update IS size-weighted averaging. Adaptive optimisers need a much smaller
+    server step: their update magnitude is ~server_lr_adaptive irrespective of
+    the pseudo-gradient scale, so reusing 1.0 would diverge."""
     if strategy in ("fedavg", "fedprox", "central"):
         return w + a.server_lr * delta
+    slr = a.server_lr_adaptive
     if strategy == "fedadagrad":
         st["v"] += delta * delta
-        return w + a.server_lr * delta / (np.sqrt(st["v"]) + a.tau)
+        return w + slr * delta / (np.sqrt(st["v"]) + a.tau)
     st["m"] = a.beta1 * st["m"] + (1.0 - a.beta1) * delta
     if strategy == "fedadam":
         st["v"] = a.beta2 * st["v"] + (1.0 - a.beta2) * delta * delta
     else:  # fedyogi
         d2 = delta * delta
         st["v"] = st["v"] - (1.0 - a.beta2) * d2 * np.sign(st["v"] - d2)
-    return w + a.server_lr * st["m"] / (np.sqrt(st["v"]) + a.tau)
+    return w + slr * st["m"] / (np.sqrt(st["v"]) + a.tau)
 
 
 def run_strategy(sc, strategy, train_rdd, val_rdd, sizes, K, a, tag):
@@ -302,7 +307,9 @@ def main(a):
               {"seeds": seeds, "conditions": conditions,
                "strategies": strategies, "rounds": a.rounds,
                "local_epochs": a.local_epochs, "local_lr": a.local_lr,
-               "server_lr": a.server_lr, "l2": a.l2, "mu": a.mu,
+               "server_lr": a.server_lr,
+               "server_lr_adaptive": a.server_lr_adaptive,
+               "l2": a.l2, "mu": a.mu,
                "beta1": a.beta1, "beta2": a.beta2, "tau": a.tau,
                "n_features": D, "partitions": a.parts,
                "preprocessing": "mean-impute + standardise from federated "
@@ -406,12 +413,15 @@ if __name__ == "__main__":
     p.add_argument("--conditions", default="iid,careunit")
     p.add_argument("--strategies",
                    default="central,fedavg,fedprox,fedadam,fedadagrad")
-    p.add_argument("--rounds", type=int, default=30)
-    p.add_argument("--local-epochs", type=int, default=2)
+    p.add_argument("--rounds", type=int, default=40)
+    # E>1 is what produces client drift. At E=2 FedAvg collapses onto
+    # centralised GD and no aggregation strategy can be distinguished.
+    p.add_argument("--local-epochs", type=int, default=5)
     p.add_argument("--local-lr", type=float, default=0.5)
     p.add_argument("--server-lr", type=float, default=1.0)
+    p.add_argument("--server-lr-adaptive", type=float, default=0.1)
     p.add_argument("--l2", type=float, default=0.01)
-    p.add_argument("--mu", type=float, default=0.01)
+    p.add_argument("--mu", type=float, default=0.1)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.99)
     p.add_argument("--tau", type=float, default=1e-3)
