@@ -4,7 +4,8 @@ param(
   [string]$MachineType = "n2-standard-4",
   [int]   $ExecCores   = 2,
   [string]$ExecMemory  = "4g",
-  [int]   $Shuffle     = 64
+  [int]   $Shuffle     = 64,
+  [string]$MaxIdle     = "30m"
 )
 
 $execs = $Workers * 2
@@ -20,8 +21,8 @@ gcloud dataproc clusters create $Name `
   --master-machine-type=$MachineType --master-boot-disk-size=100 `
   --num-workers=$Workers --worker-machine-type=$MachineType --worker-boot-disk-size=100 `
   --bucket=innate-portal-501710-n1-spark `
-  --max-idle=10m `
+  --max-idle=$MaxIdle `
   --enable-component-gateway `
   --properties=$props
 
-Write-Host "Cluster '$Name': $Workers workers, $execs executors x $ExecCores cores." -ForegroundColor Green
+Write-Host "Cluster '$Name': $Workers workers, $execs executors x $ExecCores cores, max-idle $MaxIdle." -ForegroundColor Green
