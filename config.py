@@ -27,3 +27,26 @@ PATH_MANIFEST = f"{GCS_ROOT}/manifests"
 
 def bq(table: str) -> str:
     return f"{PROJECT_ID}.{DATASET}.{table}"
+
+# Non-IID partition key. Groups MIMIC-IV's 17 first_careunit strings into three
+# clinically coherent simulated hospitals. Counts below are all icustays rows
+# (pre-cohort), verified against s_smoke output: 36,202 / 23,760 / 34,496 = 94,458.
+CAREUNIT_GROUPS = {
+    "Medical Intensive Care Unit (MICU)":                 "medical",
+    "Medical/Surgical Intensive Care Unit (MICU/SICU)":   "medical",
+    "Medicine":                                           "medical",
+    "Med/Surg":                                           "medical",
+    "Intensive Care Unit (ICU)":                          "medical",
+    "Surgical Intensive Care Unit (SICU)":                "surgical",
+    "Trauma SICU (TSICU)":                                "surgical",
+    "PACU":                                               "surgical",
+    "Surgery/Vascular/Intermediate":                      "surgical",
+    "Surgery/Trauma":                                     "surgical",
+    "Cardiac Vascular Intensive Care Unit (CVICU)":       "cardiac_neuro",
+    "Coronary Care Unit (CCU)":                           "cardiac_neuro",
+    "Neuro Intermediate":                                 "cardiac_neuro",
+    "Neuro Surgical Intensive Care Unit (Neuro SICU)":    "cardiac_neuro",
+    "Neuro Stepdown":                                     "cardiac_neuro",
+    "Neurology":                                          "cardiac_neuro",
+    "Medicine/Cardiology Intermediate":                   "cardiac_neuro",
+}
