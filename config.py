@@ -9,8 +9,12 @@ SEED       = 42
 
 IMAGE_VERSION = "2.2-debian12"
 
-MIMIC_ICU  = "physionet-data.mimiciv_3_1_icu"
-MIMIC_HOSP = "physionet-data.mimiciv_3_1_hosp"
+# MIMIC-IV v3.1 copied into our own dataset (see README: Dataproc service accounts
+# cannot inherit PhysioNet's user-level grant on physionet-data). Both aliases
+# resolve to the same local dataset; kept distinct for readability at call sites.
+
+MIMIC_ICU  = f"{PROJECT_ID}.{DATASET}"
+MIMIC_HOSP = f"{PROJECT_ID}.{DATASET}"
 
 GCS_ROOT      = f"gs://{BUCKET}"
 PATH_COHORT   = f"{GCS_ROOT}/cohort"
