@@ -44,10 +44,38 @@ GROUP = GKEY + ["split"]
 PATH_CAL = C.PATH_MODELS + "/predictions_cal"
 N_BINS = 10
 
+# Columns present in both prediction tables before calibration is applied.
+BASE = ["seed", "condition", "model", "regime", "train_client",
+        "eval_client", "split"]
+
+# S3 (MLlib: R1/R2/R2e) and S3b (federated: R3_*) write the same schema, so
+# calibration and metric computation are shared across both.
+PRED_SOURCES = [C.PATH_MODELS + "/predictions",
+                C.PATH_MODELS + "/predictions_fl"]
+
+
+def read_predictions(spark, run):
+    frames, found = [], []
+    for p in PRED_SOURCES:
+        try:
+            f = spark.read.parquet(p).select(*BASE, "stay_id", "label", "p")
+            frames.append(f)
+            found.append(p)
+            print("[read] %s" % p)
+        except Exception as e:
+            print("[read] SKIPPED %s -- %s" % (p, str(e)[:140]))
+    if not frames:
+        raise ValueError("no prediction tables found under %s" % C.PATH_MODELS)
+    run.param("prediction_sources", found)
+    out = frames[0]
+    for f in frames[1:]:
+        out = out.unionByName(f)
+    return out
+
 
 def calibrate(spark, run, args):
     """Fit isotonic per (seed, condition, model, regime, train_client)."""
-    preds = spark.read.parquet(C.PATH_MODELS + "/predictions")
+    preds = read_predictions(spark, run)
     keys = [r.asDict() for r in
             preds.select("seed", "condition", "model", "regime", "train_client")
                  .distinct().orderBy("seed", "condition", "model",
@@ -228,6 +256,14 @@ def main(args):
                 .orderBy("model", "regime", "train_client", "condition",
                          "calibration", "seed"))
         head.show(200, truncate=False)
+
+        print("=== coverage: regimes x models present in metrics ===")
+        (metrics.filter(F.col("split") == "test")
+                .groupBy("model", "regime", "calibration")
+                .agg(F.countDistinct("seed").alias("seeds"),
+                     F.count(F.lit(1)).alias("cells"))
+                .orderBy("model", "regime", "calibration")
+                .show(60, truncate=False))
 
         run.finish(C.PATH_MANIFEST, "ok")
     except Exception as e:
