@@ -41,6 +41,30 @@ class Run:
         d["default_parallelism"] = sc.defaultParallelism
         return d
 
+    def await_executors(self, expected, timeout_s=120, poll_s=2):
+        """Block until executors register, then reset the clock.
+        Startup is constant regardless of data size; billing it to the
+        workload would flatten the speedup curve."""
+        sc = self.spark.sparkContext
+        start = time.time()
+        deadline = start + timeout_s
+        n = 0
+        while time.time() < deadline:
+            try:
+                n = sc._jsc.sc().getExecutorMemoryStatus().size() - 1
+            except Exception:
+                n = 0
+            if n >= expected:
+                break
+            time.sleep(poll_s)
+        self.rec["cluster"]["live_executors"] = n
+        self.rec["cluster"]["executors_expected"] = expected
+        self.rec["cluster"]["executor_wait_s"] = round(time.time() - start, 1)
+        self.t0 = time.time()
+        print(f"[executors] {n}/{expected} registered "
+              f"in {self.rec['cluster']['executor_wait_s']}s")
+        return n
+
     def count(self, name, value):
         v = int(value)
         self.rec["counts"][name] = v
@@ -56,6 +80,7 @@ class Run:
         self.rec["wall_clock_s"] = round(time.time() - self.t0, 2)
         self.rec["utc_end"] = _utc().isoformat()
         self.rec["status"] = status
+        self.rec["cluster"]["live_executors_at_finish"] = self._cluster()["live_executors"]
         if error:
             self.rec["error"] = str(error)[:2000]
         path = f"{manifest_dir}/{self.rec['run_id']}.json"

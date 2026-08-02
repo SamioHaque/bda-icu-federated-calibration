@@ -10,6 +10,7 @@ def main(args):
     spark = SparkSession.builder.appName("s_smoke").getOrCreate()
     spark.conf.set("temporaryGcsBucket", C.BUCKET)
     run = Run(spark, "s_smoke", args.git_sha, {"seed": C.SEED})
+    run.await_executors(4)
 
     try:
         icu = (spark.read.format("bigquery")
