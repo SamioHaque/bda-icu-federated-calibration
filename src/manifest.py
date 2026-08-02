@@ -34,6 +34,12 @@ class Run:
         sc = self.spark.sparkContext
         conf = sc.getConf()
         d = {k: conf.get(k, None) for k in _CAPTURE}
+        # Runtime SQL confs can be reset post-launch via spark.conf.set, so the
+        # static SparkConf is stale for them. Read from the session instead.
+        try:
+            d["spark.sql.shuffle.partitions"] = self.spark.conf.get("spark.sql.shuffle.partitions")
+        except Exception:
+            pass
         try:
             d["live_executors"] = sc._jsc.sc().getExecutorMemoryStatus().size() - 1
         except Exception:
