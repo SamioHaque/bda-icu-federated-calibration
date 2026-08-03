@@ -118,8 +118,9 @@ def calibrate(spark, run, args):
         sub = preds.filter(cond).withColumn("pv", array_to_vector(F.array("p")))
         sub.cache()
 
-        parts = [sub.select(*GROUP, "stay_id", "label", "p")
-                    .withColumn("calibration", F.lit("raw"))
+        # NOTE: GROUP contains "calibration", so the column must be added
+        # BEFORE any select over GROUP -- read_predictions does not supply it.
+        parts = [sub.withColumn("calibration", F.lit("raw"))
                     .select(*GROUP, "stay_id", "label", "p")]
 
         # --- scope 1: pooled target population
