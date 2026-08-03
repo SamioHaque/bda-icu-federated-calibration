@@ -77,32 +77,41 @@ def t1(rows):
             ms([r["brier"] for r in v], 5), ms([r["ece"] for r in v], 5), len(v)))
 
 
+ISO_LABELS = ("isotonic", "iso_pooled", "iso_target")
+
+
 def t2(rows):
-    print("\n=== TABLE 2: effect of isotonic calibration (eval_client = ALL) ===")
-    print("ECE and Brier before/after; dAUROC shows discrimination is preserved\n")
+    print("\n=== TABLE 2: effect of calibration by scope (eval_client = ALL) ===")
+    print("dAUROC confirms discrimination is preserved while ECE moves a lot\n")
     sel = [r for r in rows if r["eval_client"] == "ALL"]
+    scopes = [c for c in ISO_LABELS
+              if any(r["calibration"] == c for r in sel)]
     g = group(sel, ["model", "regime", "train_client", "condition"])
-    hdr = "%-6s %-14s %-14s %-9s %-10s %-10s %-8s %-10s %-10s %-10s" % (
+    hdr = "%-6s %-14s %-14s %-9s %-11s %-10s %-10s %-8s %-10s" % (
         "model", "regime", "train_client", "cond",
-        "ECE_raw", "ECE_iso", "ECE_red", "Brier_raw", "Brier_iso", "dAUROC")
+        "scope", "ECE_raw", "ECE_cal", "ECE_red", "dAUROC")
     print(hdr); line(len(hdr))
     worst = []
     for k in sorted(g):
         v = g[k]
         raw = [r for r in v if r["calibration"] == "raw"]
-        iso = [r for r in v if r["calibration"] == "isotonic"]
-        if not raw or not iso:
+        if not raw:
             continue
-        er = st.mean([r["ece"] for r in raw]); ei = st.mean([r["ece"] for r in iso])
-        br = st.mean([r["brier"] for r in raw]); bi = st.mean([r["brier"] for r in iso])
-        ar = st.mean([r["auroc"] for r in raw]); ai = st.mean([r["auroc"] for r in iso])
-        red = 100.0 * (er - ei) / er if er > 0 else 0.0
+        er = st.mean([r["ece"] for r in raw])
+        ar = st.mean([r["auroc"] for r in raw])
         worst.append((er, k))
-        print("%-6s %-14s %-14s %-9s %-10.5f %-10.5f %-7.1f%% %-10.5f %-10.5f %+.4f" % (
-            k[0], k[1], k[2], k[3], er, ei, red, br, bi, ai - ar))
+        for sc in scopes:
+            cal = [r for r in v if r["calibration"] == sc]
+            if not cal:
+                continue
+            ei = st.mean([r["ece"] for r in cal])
+            ai = st.mean([r["auroc"] for r in cal])
+            red = 100.0 * (er - ei) / er if er > 0 else 0.0
+            print("%-6s %-14s %-14s %-9s %-11s %-10.5f %-10.5f %-7.1f%% %+.4f" % (
+                k[0], k[1], k[2], k[3], sc, er, ei, red, ai - ar))
     worst.sort(reverse=True)
     print("\nWorst raw ECE:")
-    for er, k in worst[:5]:
+    for er, k in worst[:6]:
         print("  %.5f  %s" % (er, " / ".join(k)))
 
 
@@ -173,6 +182,37 @@ def t5(rows):
             ms([r["prevalence"] for r in v])))
 
 
+def t6(rows):
+    """The headline calibration result: does recalibrating at the destination
+    repair a transferred model, where recalibrating to the pooled population
+    does not?"""
+    print("\n=== TABLE 6: transfer ECE under each calibration scope ===")
+    print("gbt / careunit / R2_local; diagonal = local, off-diagonal = transferred\n")
+    sel = [r for r in rows
+           if r["model"] == "gbt" and r["condition"] == "careunit"
+           and r["regime"] == "R2_local" and r["eval_client"] != "ALL"]
+    scopes = ["raw"] + [c for c in ISO_LABELS
+                        if any(r["calibration"] == c for r in sel)]
+    hdr = "%-11s %-14s %-14s %-12s" % ("scope", "diag ECE", "off-diag ECE", "delta")
+    print(hdr); line(len(hdr))
+    for sc in scopes:
+        s = [r for r in sel if r["calibration"] == sc]
+        diag = [r["ece"] for r in s if r["train_client"] == r["eval_client"]]
+        off = [r["ece"] for r in s if r["train_client"] != r["eval_client"]]
+        if not diag or not off:
+            continue
+        print("%-11s %-14.5f %-14.5f %+.5f" % (
+            sc, st.mean(diag), st.mean(off), st.mean(off) - st.mean(diag)))
+
+    print("\nWorst transfer cell (medical -> cardiac_neuro):")
+    for sc in scopes:
+        c = [r["ece"] for r in sel
+             if r["calibration"] == sc and r["train_client"] == "medical"
+             and r["eval_client"] == "cardiac_neuro"]
+        if c:
+            print("  %-11s ECE %s" % (sc, ms(c, 5)))
+
+
 def main():
     rows = load()
     print("Loaded %d test-split metric rows" % len(rows))
@@ -180,9 +220,12 @@ def main():
     t2(rows)
     for cond in ("careunit", "iid"):
         t3(rows, "gbt", cond, "raw")
-    t3(rows, "gbt", "careunit", "isotonic")
+    for sc in ISO_LABELS:
+        if any(r["calibration"] == sc for r in rows):
+            t3(rows, "gbt", "careunit", sc)
     t4(rows)
     t5(rows)
+    t6(rows)
 
 
 if __name__ == "__main__":
