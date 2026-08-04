@@ -31,6 +31,15 @@ CB = {"black": "#000000", "orange": "#E69F00", "sky": "#56B4E9",
       "verm": "#D55E00", "purple": "#CC79A7"}
 SERIES = [CB["blue"], CB["verm"], CB["green"], CB["orange"], CB["purple"], CB["sky"]]
 
+# The paper's terminology. "careunit" is the non-IID partition; "iid" is the
+# control. Figures must use the paper's words, not the code's column values.
+COND = {"careunit": "Non-IID (care unit)", "iid": "IID (control)"}
+
+
+def cond_label(c):
+    return COND.get(c, c)
+
+
 plt.rcParams.update({
     "figure.dpi": 300, "savefig.dpi": 300, "font.size": 9,
     "axes.grid": True, "grid.alpha": 0.3, "grid.linewidth": 0.5,
@@ -88,12 +97,24 @@ def fig_reliability(rel):
         print("  [warn] fig1: target cell absent")
         return
 
-    fig, axes = plt.subplots(1, len(scopes), figsize=(3.0 * len(scopes), 3.1),
+    fig, axes = plt.subplots(1, len(scopes), figsize=(3.0 * len(scopes), 3.2),
                              sharex=True, sharey=True)
     if len(scopes) == 1:
         axes = [axes]
     for ax, sc in zip(axes, scopes):
         s = [r for r in sel if r["calibration"] == sc]
+
+        # ECE is computed PER SEED then averaged, matching the metrics tables.
+        # Pooling bins across seeds first would let opposite-sign gaps cancel
+        # and would report a smaller ECE than the tables do.
+        per_seed = []
+        for sd in sorted({r["seed"] for r in s}):
+            ss = [r for r in s if r["seed"] == sd]
+            tot = sum(r["bin_n"] for r in ss)
+            if tot:
+                per_seed.append(sum(r["gap"] * r["bin_n"] for r in ss) / tot)
+        e = st.mean(per_seed) if per_seed else float("nan")
+
         bins = {}
         for r in s:
             bins.setdefault(r["bin"], []).append(r)
@@ -111,17 +132,16 @@ def fig_reliability(rel):
         smax = max(ws) if ws else 1
         ax.scatter(xs, ys, s=[40.0 * w / smax for w in ws], c=CB["blue"],
                    alpha=0.35, edgecolors="none")
-        ece = [r["ece"] for r in s if "ece" in r and isinstance(r.get("ece"), float)]
-        gaps = [abs(x - y) * w for x, y, w in zip(xs, ys, ws)]
-        e = sum(gaps) / sum(ws) if ws else float("nan")
         ax.set_title("%s\nECE = %.4f" % (sc, e), fontsize=9)
         ax.set_xlabel("predicted probability")
         ax.set_xlim(0, 0.55); ax.set_ylim(0, 0.55)
         ax.set_aspect("equal")
     axes[0].set_ylabel("observed frequency")
     axes[0].legend(loc="upper left", fontsize=7)
-    fig.suptitle("GBT trained on medical, evaluated on cardiac/neuro "
-                 "(prevalence 15.1% -> 6.9%)", fontsize=9.5, y=1.02)
+    fig.suptitle("Non-IID transfer: GBT trained on medical, evaluated on "
+                 "cardiac/neuro (prevalence 15.1% -> 6.9%)\n"
+                 "below the diagonal = over-prediction of risk",
+                 fontsize=9.5, y=1.06)
     save(fig, "fig1_reliability_transfer.png")
 
 
@@ -139,41 +159,54 @@ def fig_transfer(met):
     tr = sorted({r["train_client"] for r in sel})
     ev = sorted({r["eval_client"] for r in sel})
 
-    fig, axes = plt.subplots(2, len(scopes), figsize=(3.3 * len(scopes), 6.0))
+    def cell(sc, metric, t, e):
+        v = [r[metric] for r in sel
+             if r["calibration"] == sc and r["train_client"] == t
+             and r["eval_client"] == e and isinstance(r[metric], float)]
+        return st.mean(v) if v else float("nan")
+
+    # One colour scale per metric across ALL scopes. Independent scales would
+    # make a 0.014 cell and a 0.105 cell render identically dark, implying no
+    # improvement where there is a large one.
+    scale = {}
+    for metric in ("auroc", "ece"):
+        vals = [cell(sc, metric, t, e) for sc in scopes for t in tr for e in ev]
+        vals = [v for v in vals if v == v]
+        scale[metric] = (min(vals), max(vals))
+
+    fig, axes = plt.subplots(2, len(scopes), figsize=(3.5 * len(scopes), 6.6),
+                             constrained_layout=True)
     if len(scopes) == 1:
         axes = axes.reshape(2, 1)
     for j, sc in enumerate(scopes):
         for i, (metric, cmap, fmt) in enumerate(
                 [("auroc", "viridis", "%.3f"), ("ece", "magma_r", "%.4f")]):
             ax = axes[i][j]
-            M = []
-            for t in tr:
-                row = []
-                for e in ev:
-                    v = [r[metric] for r in sel
-                         if r["calibration"] == sc and r["train_client"] == t
-                         and r["eval_client"] == e and isinstance(r[metric], float)]
-                    row.append(st.mean(v) if v else float("nan"))
-                M.append(row)
-            im = ax.imshow(M, cmap=cmap, aspect="auto")
+            M = [[cell(sc, metric, t, e) for e in ev] for t in tr]
+            vmin, vmax = scale[metric]
+            im = ax.imshow(M, cmap=cmap, aspect="auto", vmin=vmin, vmax=vmax)
             ax.set_xticks(range(len(ev)))
             ax.set_xticklabels([e.replace("_", "\n") for e in ev], fontsize=7)
             ax.set_yticks(range(len(tr)))
             ax.set_yticklabels([t.replace("_", "\n") for t in tr], fontsize=7)
+            mid = vmin + 0.55 * (vmax - vmin)
             for a in range(len(tr)):
                 for b in range(len(ev)):
                     val = M[a][b]
                     if val != val:
                         continue
+                    dark = (val > mid) if metric == "ece" else (val < mid)
                     ax.text(b, a, fmt % val, ha="center", va="center",
-                            fontsize=7.5,
-                            color="white" if (metric == "ece") == (val > 0.03) else "black")
+                            fontsize=7.5, color="white" if dark else "black")
             ax.set_title("%s  (%s)" % (metric.upper(), sc), fontsize=9)
-            ax.set_xlabel("evaluated on"); ax.grid(False)
+            ax.grid(False)
+            if i == 1:
+                ax.set_xlabel("evaluated on")
             if j == 0:
                 ax.set_ylabel("trained on")
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.suptitle("Cross-client transfer, GBT, care-unit partition", fontsize=10, y=0.995)
+    fig.suptitle("Cross-client transfer, GBT, Non-IID (care unit) partition\n"
+                 "shared colour scale per row", fontsize=10)
     save(fig, "fig2_transfer_matrix.png")
 
 
@@ -211,11 +244,21 @@ def fig_fl(hist):
                 ax.plot(xs, ys, "-", lw=1.4, c=c, label=s)
                 ax.fill_between(xs, [y - e for y, e in zip(ys, sd)],
                                 [y + e for y, e in zip(ys, sd)], color=c, alpha=0.15)
+                # Faint per-seed traces: distinguishes genuine oscillation
+                # from an artifact of seeds evaluated on different cadences.
+                for sd_id in sorted({r["seed"] for r in hist}):
+                    pl = [(r["round"], r[col]) for r in hist
+                          if r["condition"] == cond and r["strategy"] == s
+                          and r["seed"] == sd_id and isinstance(r.get(col), float)]
+                    if len(pl) > 1:
+                        pl.sort()
+                        ax.plot([p[0] for p in pl], [p[1] for p in pl],
+                                "-", lw=0.4, c=c, alpha=0.35)
             ax.set_ylabel(ylab if j == 0 else "")
             if i == 1:
                 ax.set_xlabel("communication round")
             if i == 0:
-                ax.set_title(cond, fontsize=9.5)
+                ax.set_title(cond_label(cond), fontsize=9.5)
     axes[0][0].legend(fontsize=7, loc="lower right", ncol=2)
     fig.suptitle("Federated convergence, mean +- sd over 3 seeds", fontsize=10, y=0.995)
     save(fig, "fig3_fl_convergence.png")
@@ -312,10 +355,56 @@ def fig_dissociation(met):
                    s=14, alpha=0.65, c=SERIES[k], edgecolors="none", label=sc)
     ax.set_xlabel("AUROC (discrimination)")
     ax.set_ylabel("ECE (calibration error)")
-    ax.set_title("Calibration shifts ECE, not AUROC\ncare-unit partition, all "
+    ax.set_title("Calibration shifts ECE, not AUROC\nNon-IID (care unit), all "
                  "regimes and clients", fontsize=9.5)
     ax.legend(fontsize=7.5)
     save(fig, "fig5_dissociation.png")
+
+
+def fig_iid_contrast(met):
+    """The title claim, in one panel: transfer penalty under IID vs Non-IID,
+    before and after local recalibration."""
+    scopes = [s for s in ("raw", "iso_target") if any(r["calibration"] == s for r in met)]
+    if not scopes:
+        return
+    conds = [c for c in ("iid", "careunit") if any(r["condition"] == c for r in met)]
+    fig, axes = plt.subplots(1, 2, figsize=(8.0, 3.5))
+
+    for i, (metric, ylab) in enumerate([("ece", "ECE (calibration error)"),
+                                        ("auroc", "AUROC (discrimination)")]):
+        ax = axes[i]
+        labels, width = [], 0.35
+        for j, sc in enumerate(scopes):
+            diag_v, off_v, xs = [], [], []
+            for k, cond in enumerate(conds):
+                s = [r for r in met
+                     if r["split"] == "test" and r["model"] == "gbt"
+                     and r["condition"] == cond and r["regime"] == "R2_local"
+                     and r["eval_client"] != "ALL" and r["calibration"] == sc
+                     and isinstance(r[metric], float)]
+                d = [r[metric] for r in s if r["train_client"] == r["eval_client"]]
+                o = [r[metric] for r in s if r["train_client"] != r["eval_client"]]
+                if not d or not o:
+                    continue
+                diag_v.append(st.mean(d)); off_v.append(st.mean(o)); xs.append(k)
+            if not xs:
+                continue
+            off = (j - (len(scopes) - 1) / 2.0) * width
+            ax.bar([x + off - width / 4 for x in xs], diag_v, width / 2,
+                   color=SERIES[j], alpha=0.55,
+                   label="%s, local" % sc if i == 0 else None)
+            ax.bar([x + off + width / 4 for x in xs], off_v, width / 2,
+                   color=SERIES[j], alpha=1.0,
+                   label="%s, transferred" % sc if i == 0 else None)
+        ax.set_xticks(range(len(conds)))
+        ax.set_xticklabels([cond_label(c) for c in conds], fontsize=8)
+        ax.set_ylabel(ylab)
+        ax.set_title(metric.upper(), fontsize=9.5)
+    axes[0].legend(fontsize=7, ncol=2)
+    fig.suptitle("Transfer penalty is a Non-IID phenomenon; local "
+                 "recalibration removes it from ECE but not AUROC",
+                 fontsize=9.5, y=1.03)
+    save(fig, "fig6_iid_vs_noniid.png")
 
 
 def main():
@@ -330,6 +419,7 @@ def main():
     fig_fl(hist)
     fig_scaling()
     fig_dissociation(met)
+    fig_iid_contrast(met)
     print("done -> %s" % FIG)
 
 
