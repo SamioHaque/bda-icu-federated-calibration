@@ -222,7 +222,7 @@ def server_update(strategy, w, delta, st, a, rnd):
         st["v"] += delta * delta
         return w + slr * delta / (np.sqrt(st["v"]) + a.tau)
     st["m"] = a.beta1 * st["m"] + (1.0 - a.beta1) * delta
-    if strategy == "fedadam":
+    if strategy in ("fedadam", "central_adam"):
         st["v"] = a.beta2 * st["v"] + (1.0 - a.beta2) * delta * delta
     else:  # fedyogi
         d2 = delta * delta
@@ -329,7 +329,7 @@ def main(a):
     run.await_executors(a.expect_executors)
 
     out = C.PATH_MODELS + "/predictions_fl"
-    first = True
+    first = not a.append
     history = []
     timing = []
 
@@ -360,7 +360,7 @@ def main(a):
                 va_one.count()
 
                 for strategy in strategies:
-                    if strategy == "central":
+                    if strategy in ("central", "central_adam"):
                         rdd_t, rdd_v, K = tr_one, va_one, 1
                         sz = {0: float(sum(sizes.values()))}
                     else:
@@ -402,7 +402,8 @@ def main(a):
         run.count("prediction_rows", spark.read.parquet(out).count())
 
         h_uri = C.PATH_METRICS + "/fl_history"
-        spark.createDataFrame(history).coalesce(1).write.mode("overwrite") \
+        spark.createDataFrame(history).coalesce(1) \
+             .write.mode("append" if a.append else "overwrite") \
              .option("header", True).csv(h_uri)
         run.output(h_uri)
 
@@ -439,6 +440,8 @@ if __name__ == "__main__":
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--shuffle", type=int, default=64)
     p.add_argument("--parts", type=int, default=8)
+    p.add_argument("--append", action="store_true",
+                   help="append to predictions_fl and fl_history instead of overwriting")
     p.add_argument("--tag", default="main",
                    help="label recorded in the manifest, e.g. a tuning sweep id")
     main(p.parse_args())
