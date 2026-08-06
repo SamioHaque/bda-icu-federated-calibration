@@ -237,7 +237,8 @@ def fig_fl(hist):
                     pts.setdefault(r["round"], []).append(v)
                 if not pts:
                     continue
-                xs = sorted(pts)
+                nseeds = len({r["seed"] for r in hist})
+                xs = [x for x in sorted(pts) if len(pts[x]) == nseeds]
                 ys = [st.mean(pts[x]) for x in xs]
                 sd = [st.pstdev(pts[x]) if len(pts[x]) > 1 else 0.0 for x in xs]
                 c = SERIES[k % len(SERIES)]
