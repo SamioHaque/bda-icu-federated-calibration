@@ -95,8 +95,8 @@ box(X, 38.0, 25.5, 11.0, "S3  Spark MLlib",
     "LogisticRegression · GBTClassifier\n\n"
     "R1   pooled\nR2   client-local\nR2e  prediction ensemble", CB["green"], fs_b=7.1)
 box(X + 28.5, 38.0, 25.5, 11.0, "S3b  Federated solver",
-    "logistic regression\n40 rounds x 5 local epochs\n\n"
-    "R3  central · FedAvg · FedProx\n      FedAdam · FedAdagrad", CB["orange"], fs_b=7.1)
+    "logistic regression (convex)\nMLP, 16 hidden (non-convex)\n40 rounds x 5 local epochs\n\n"
+    "R3  central · FedAvg · FedProx\n      FedAdam · FedAdagrad", CB["orange"], fs_b=6.9)
 note(48.8, "MLlib exposes no warm start, so the local solver\n"
            "is hand-written: gradients by distributed\n"
            "treeReduce, all clients in a single pass.\n\n"

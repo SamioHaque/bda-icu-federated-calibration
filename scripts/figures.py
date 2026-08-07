@@ -211,11 +211,12 @@ def fig_transfer(met):
 
 
 # --------------------------------------------------------------- Figure 3
-def fig_fl(hist):
+def fig_fl(hist, model_label="logistic regression", outname="fig3_fl_convergence.png"):
     """FL convergence: validation AUROC and training loss vs round."""
     if not hist:
-        print("  [warn] fig3: no fl_history")
+        print("  [warn] %s: no history rows" % outname)
         return
+    nseeds = len({r["seed"] for r in hist})
     conds = sorted({r["condition"] for r in hist})
     strats = sorted({r["strategy"] for r in hist})
     fig, axes = plt.subplots(2, len(conds), figsize=(4.0 * len(conds), 6.0),
@@ -237,8 +238,13 @@ def fig_fl(hist):
                     pts.setdefault(r["round"], []).append(v)
                 if not pts:
                     continue
-                nseeds = len({r["seed"] for r in hist})
+                # Only rounds evaluated by EVERY seed. fl_history can mix
+                # --eval-every cadences across runs, and averaging over a
+                # varying subset of seeds produces a spurious sawtooth in
+                # which the mean falls outside its own per-seed traces.
                 xs = [x for x in sorted(pts) if len(pts[x]) == nseeds]
+                if not xs:
+                    xs = sorted(pts)
                 ys = [st.mean(pts[x]) for x in xs]
                 sd = [st.pstdev(pts[x]) if len(pts[x]) > 1 else 0.0 for x in xs]
                 c = SERIES[k % len(SERIES)]
@@ -261,8 +267,9 @@ def fig_fl(hist):
             if i == 0:
                 ax.set_title(cond_label(cond), fontsize=9.5)
     axes[0][0].legend(fontsize=7, loc="lower right", ncol=2)
-    fig.suptitle("Federated convergence, mean +- sd over 3 seeds", fontsize=10, y=0.995)
-    save(fig, "fig3_fl_convergence.png")
+    fig.suptitle("Federated convergence: %s\nmean +- sd over %d seeds; faint lines are individual seeds"
+                 % (model_label, nseeds), fontsize=10, y=0.995)
+    save(fig, outname)
 
 
 # --------------------------------------------------------------- Figure 4
@@ -356,8 +363,9 @@ def fig_dissociation(met):
                    s=14, alpha=0.65, c=SERIES[k], edgecolors="none", label=sc)
     ax.set_xlabel("AUROC (discrimination)")
     ax.set_ylabel("ECE (calibration error)")
-    ax.set_title("Calibration shifts ECE, not AUROC\nNon-IID (care unit), all "
-                 "regimes and clients", fontsize=9.5)
+    models = sorted({r["model"] for r in sel})
+    ax.set_title("Calibration shifts ECE, not AUROC\nNon-IID (care unit); all regimes, "
+                 "clients and models (%s)" % ", ".join(models), fontsize=9.5)
     ax.legend(fontsize=7.5)
     save(fig, "fig5_dissociation.png")
 
@@ -412,12 +420,17 @@ def main():
     print("reading result tables ...")
     met = read_csv_dir("metrics", "metrics")
     rel = read_csv_dir("metrics", "reliability")
-    hist = read_csv_dir("metrics", "fl_history")
-    print("  metrics=%d  reliability=%d  fl_history=%d" % (len(met), len(rel), len(hist)))
+    hist_lr = read_csv_dir("metrics", "fl_history")
+    hist_mlp = read_csv_dir("metrics", "fl_history_mlp")
+    print("  metrics=%d  reliability=%d  fl_history(lr)=%d  fl_history(mlp)=%d"
+          % (len(met), len(rel), len(hist_lr), len(hist_mlp)))
+    print("  models present in metrics: %s"
+          % sorted({r["model"] for r in met}))
     print("generating figures ...")
     fig_reliability(rel)
     fig_transfer(met)
-    fig_fl(hist)
+    fig_fl(hist_lr, "logistic regression", "fig3_fl_convergence.png")
+    fig_fl(hist_mlp, "MLP, 16 hidden units", "fig3b_fl_convergence_mlp.png")
     fig_scaling()
     fig_dissociation(met)
     fig_iid_contrast(met)
