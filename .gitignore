@@ -27,6 +27,13 @@ venv/
 # Editor
 .vscode/
 
-# OS
+# OS & IDE
 Thumbs.db
 .DS_Store
+desktop.ini
+
+# Presentation & Ad-hoc
+pptAndDoc/
+ppt_summary.txt
+run_s5_topup.ps1
+export_metrics.py
