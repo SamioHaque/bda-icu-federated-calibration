@@ -1,0 +1,9 @@
+# Core Distributed Big Data Dependencies
+pyspark>=3.5.0
+
+# Numerical, Analysis & Machine Learning
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Visualization & Reporting
+matplotlib>=3.7.0
